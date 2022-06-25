@@ -1,0 +1,208 @@
+---
+title: "Project 002"
+author: "Kyle Brewster"
+date: '2022-06-17'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part 0: Prep Work
+
+```{r}
+pacman::p_load(dplyr, magrittr,
+               glmnet, tidymodels,
+               dvmisc, parsnip, tidyverse, tidyr,tune,
+               workflows, recipes)
+election = read.csv("election-2016.csv")
+
+# Setting seed
+set.seed(123)
+```
+
+## Part 1: Penalized regression
+
+First, to pre-process the data
+```{r runs}
+# Processing recipe
+elect_recipe = election %>% recipe(i_republican_2016 ~ .) %>% 
+  update_role(fips, new_role = "id variable") %>% 
+  step_normalize(all_predictors() & all_numeric()) %>% 
+  step_dummy(all_predictors() & all_nominal()) %>% 
+  step_rename_at(everything(), fn = stringr::str_to_lower)
+
+# Juicing
+elect_clean = elect_recipe %>% prep() %>% juice()
+
+# Defining folds
+elect_cv = elect_clean %>% vfold_cv(v =5)
+
+# Setting range of λ and α
+lambdas =10^seq(from =5, to = -2, length =1e3)
+alphas = seq(from =0, to =1, by =0.1)
+```
+
+
+**01\.** Using 5-fold cross validation: tune a Lasso regression model
+
+```{r runs}
+# Creating cross-validated model
+lasso_mod = cv.glmnet(
+   x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
+   y = elect_clean$i_republican_2016,
+   standardize =F,
+   alpha = 1,
+   lambda = lambdas,
+   type.measure = "mse",
+   nfolds = 5)
+
+# Create data frame of our results
+lasso_summary = data.frame(
+  lambda = lasso_mod$lambda,
+  rmse = sqrt(lasso_mod$cvm))
+
+# Printing various results
+summary(lasso_mod)
+plot(lasso_mod)
+lasso_summary %>% 
+    group_by(lambda) %>% 
+    slice(which.min(rmse)) %>%
+    head(.,n=1)
+```
+
+
+**02\.** What is the penalty for your 'best' model?
+
+```{r runs}
+library(ggplot2)
+ggplot(
+  data = lasso_summary,
+  aes(x = lambda, y = rmse)) +
+   geom_line() +
+   geom_point(data = lasso_summary %>% filter(rmse == min(rmse)),
+  size = 3.5,
+  color = "blue") +
+   scale_y_continuous("RMSE") +
+   scale_x_continuous(expression(lambda),trans = "log10",
+                      labels = c("0.1", "10", "1,000", "100,000"),
+                      breaks = c(0.1, 10, 1000, 100000),) 
+```
+
+Also as shown in the previous question, the λ (i.e. penalty) is 0.01 with an RMSE of 0.205627.
+
+**03\.** Which metric did you use to define the 'best' model? Does it make sense in this setting? Explain your answer.
+
+RMSE was selected to define what is our best model because as we asses model performs with a large number of lambda values, we can see how the associated RMSE measurement changes and thus minimize the measurement of error with the associated lambda value.
+
+**04\.** Now tune an elasticnet prediction model.
+
+Spent too long working on this, kept running into the same error when finalizing the modeling/workflow.
+```{r error=TRUE}
+lambdas =10^seq(from =5, to = -2, length =1e2)
+alphas = seq(from =0, to =1, by =0.1)
+
+control <- control_resamples(save_pred = TRUE)
+
+# Define the elasticnet model
+model_net = linear_reg(penalty = tune(),
+                       mixture = tune()) %>%
+   set_engine("glmnet") 
+
+# Define workflow
+workflow_net = workflow() %>%
+   add_model(model_net) %>%
+   add_recipe(elect_recipe)
+
+temp = fit_resamples(model_net,elect_recipe,elect_cv,control = control)
+
+# CV elasticnet in range of lambdas
+cv_net = workflow_net %>%
+   tune_grid(elect_cv,
+             grid = data.frame(penalty=lambdas,mixture=.5),
+             metrics = metric_set(rmse))
+```
+
+
+```{r}
+net_mod = cv.glmnet(
+   x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
+   y = elect_clean$i_republican_2016,
+   standardize =T,
+   alpha = .9, # Arbitrary selection
+   lambda = lambdas,
+   type.measure = "mse",
+   nfolds = 5)
+
+# Create data frame of our results
+lasso_summary = data.frame(
+  lambda = net_mod$lambda,
+  rmse = sqrt(net_mod$cvm))
+
+# Printing various results
+summary(net_mod)
+plot(net_mod)
+lasso_summary %>% 
+    group_by(lambda) %>% 
+    slice(which.min(rmse)) %>%
+    head(.,n=1)
+```
+
+```{r}
+net_mod2 = cv.glmnet(
+   x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
+   y = elect_clean$i_republican_2016,
+   standardize =T,
+   alpha = .1, # Arbitrary selection
+   lambda = lambdas,
+   type.measure = "mse",
+   nfolds = 5)
+
+# Create data frame of our results
+lasso_summary2 = data.frame(
+  lambda = net_mod2$lambda,
+  rmse = sqrt(net_mod2$cvm))
+
+# Printing various results
+summary(net_mod2)
+plot(net_mod2)
+lasso_summary2 %>% 
+    group_by(lambda) %>% 
+    slice(which.min(rmse)) %>%
+    head(.,n=1)
+```
+
+The two elastic net models with alpha values of 0.9 and 0.1 gave us RMSE measurements of 0.2049942 and 0.2241721, respectively. We can compare this information to the RMSE of the LASSO model of 0.205627.
+
+**05\.** What do the chosen hyperparameters for the elasticnet tell you about the Ridge vs. Lasso in this setting?
+
+Since we can see that the RMSE for the elasticnet models is better (lower) when the alpha value is higher and the best performing models of all the above was the LASSO model, we can be confident in saying that LASSO regression would be a better in the scope of this setting supported by the insight provided by the elasticnet models.
+
+## Part 2: Logistic regression
+
+**06\.** Now fit a logistic regression (`logistic_reg()` in `tidymodels`) model—using 5-fold cross validation to get a sense of your model's performance (record the following metrics: accuracy, precision, specificity, sensitivity, ROC AUC).
+
+*Hint:* You can tell `tune_grid()` or `fit_resamples()` which metrics to collect via the `metrics` argument. You'll want to give the argument a [`metric_set()`](https://yardstick.tidymodels.org/reference/metric_set.html).
+
+**07\.** What is the cross-validated accuracy of this logistic model? 
+
+**08\.** Is your accuracy "good"? Explain your answer—including a comparison to the null classifier.
+
+**09\.** What do the other metrics tell you about your model? Is it "good"? Are you consistently missing one class of outcomes? Explain.
+
+## Part 3: Logistic Lasso
+
+**10\.** Now fit a logistic Lasso regression (`logistic_reg()` in `tidymodels`, but now tuning the penalty) model—using 5-fold cross validation. Again: record the following metrics: accuracy, precision, specificity, sensitivity, ROC AUC.
+
+**11\.** How does the performance of this logistic Lasso compare to the logistic regression in Part 2?
+
+**12\.** Do you think moving to a logistic elasticnet would improve anything? Explain.
+
+## Part 4: Reflection
+
+**13\.** Why might we prefer Lasso to elasticnet (or vice versa)?
+
+**14\.** What the the differences between logistic regression and linear regression? What are the similarities?
+
+**15\.** Imagine you worked for a specific political party. Which metric would you use for assessing model performance?
