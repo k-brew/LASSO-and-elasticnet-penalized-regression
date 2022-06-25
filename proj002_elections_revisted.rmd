@@ -25,7 +25,7 @@ set.seed(123)
 ## Part 1: Penalized regression
 
 First, to pre-process the data
-```{r runs}
+```{r}
 # Processing recipe
 elect_recipe = election %>% recipe(i_republican_2016 ~ .) %>% 
   update_role(fips, new_role = "id variable") %>% 
@@ -40,14 +40,15 @@ elect_clean = elect_recipe %>% prep() %>% juice()
 elect_cv = elect_clean %>% vfold_cv(v =5)
 
 # Setting range of λ and α
-lambdas =10^seq(from =5, to = -2, length =1e3)
+lambdas = 10^seq(from =5, to = -2, length =1e3)
 alphas = seq(from =0, to =1, by =0.1)
+
 ```
 
 
 **01\.** Using 5-fold cross validation: tune a Lasso regression model
 
-```{r runs}
+```{r}
 # Creating cross-validated model
 lasso_mod = cv.glmnet(
    x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
@@ -75,7 +76,7 @@ lasso_summary %>%
 
 **02\.** What is the penalty for your 'best' model?
 
-```{r runs}
+```{r}
 library(ggplot2)
 ggplot(
   data = lasso_summary,
