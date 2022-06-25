@@ -1,7 +1,6 @@
 ---
 title: "Project 002"
 author: "Kyle Brewster"
-date: '2022-06-17'
 output: html_document
 ---
 
@@ -99,33 +98,6 @@ RMSE was selected to define what is our best model because as we asses model per
 
 **04\.** Now tune an elasticnet prediction model.
 
-Spent too long working on this, kept running into the same error when finalizing the modeling/workflow.
-```{r error=TRUE}
-lambdas =10^seq(from =5, to = -2, length =1e2)
-alphas = seq(from =0, to =1, by =0.1)
-
-control <- control_resamples(save_pred = TRUE)
-
-# Define the elasticnet model
-model_net = linear_reg(penalty = tune(),
-                       mixture = tune()) %>%
-   set_engine("glmnet") 
-
-# Define workflow
-workflow_net = workflow() %>%
-   add_model(model_net) %>%
-   add_recipe(elect_recipe)
-
-temp = fit_resamples(model_net,elect_recipe,elect_cv,control = control)
-
-# CV elasticnet in range of lambdas
-cv_net = workflow_net %>%
-   tune_grid(elect_cv,
-             grid = data.frame(penalty=lambdas,mixture=.5),
-             metrics = metric_set(rmse))
-```
-
-
 ```{r}
 net_mod = cv.glmnet(
    x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
@@ -204,7 +176,7 @@ elect_cv = elect_clean %>% vfold_cv(v =5)
 
 # Defining model
 mod_logi = logistic_reg(mode = "classification") %>% 
-   et_engine("glm")
+   set_engine("glm")
 
 # Fitting
 lm_form_fit <- mod_logi %>%
@@ -216,11 +188,12 @@ lm_form_fit <- mod_logi %>%
 # Making predictions
 elect_clean$preds = predict(lm_form_fit, elect_clean)
 
-temp = as.data.frame(preds$.pred_class) %>% rename(vec = 1)
-temp1 = temp %>% mutate(new_c = elect_clean$i_republican_2016)
-
+temp = elect_clean %>% select(preds) %>% 
+   mutate(new_c = as.factor(elect_clean$i_republican_2016),
+          preds = as.factor(if_else(preds==1,1,0))) %>% as.data.frame()
+   
 # Confusion matrix and other metrics
-confusionMatrix(temp1$vec,temp1$new_c)
+confusionMatrix(temp$preds, temp$new_c)
 ```
 
 
@@ -236,14 +209,81 @@ I would say that this is a fairly good model. Several of the metrics are in the 
 
 **10\.** Now fit a logistic Lasso regression (`logistic_reg()` in `tidymodels`, but now tuning the penalty) model—using 5-fold cross validation. Again: record the following metrics: accuracy, precision, specificity, sensitivity, ROC AUC.
 
-```{r}
 
+```{r}
+election2 <- election %>% select(-c("county")) %>%
+   mutate(state = as.factor(state),
+          i_republican_2012 = as.factor(i_republican_2012),
+          i_republican_2016 = as.factor(i_republican_2016))
+
+# Processing recipe
+elect_recipe = election2 %>%
+   recipe(i_republican_2016 ~ .) %>% 
+  update_role(fips, new_role = "id variable") %>% 
+  step_normalize(all_predictors() & all_numeric()) %>% 
+  step_dummy(all_predictors() & all_nominal()) %>% 
+  step_rename_at(everything(), fn = stringr::str_to_lower)
+elect_clean = elect_recipe %>% prep() %>% juice()
+elect_cv = elect_clean %>% vfold_cv(v =5)
+
+lasso_mod_fin = cv.glmnet(
+   x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
+   y = elect_clean$i_republican_2016,
+   standardize =F,
+   family="binomial",
+   alpha = 1,
+   lambda = lambdas,
+   type.measure = "mse",
+   nfolds = 5)
+
+mode1 <- glmnet(
+      x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
+       y = elect_clean$i_republican_2016,
+      alpha = 1, family = "binomial",
+      lambda = lasso_mod_fin$lambda.min)
+head(coef(mode1),n=15)
+plot(lasso_mod_fin)
 ```
 
+```{r}
+# Making predictions
+elect_clean$pred_final = predict(mode1,type = "response",
+               s = lasso_mod_fin$lambda.min,
+               newx = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix())
+
+lassss = elect_clean %>% select(pred_final,i_republican_2016) %>%
+   mutate( # Using different cutoff values to see variation
+      sm_conf = as.factor(
+         if_else(pred_final<0.2,0,1)),
+      fifty_fifty = as.factor(
+         if_else(pred_final<0.5,0,1)),
+      bg_conf = as.factor(
+         if_else(pred_final<0.8,0,1)))
+
+# Creating confusion matrices
+confusionMatrix(lassss$i_republican_2016,
+                lassss$sm_conf)
+```
+
+```{r}
+confusionMatrix(lassss$i_republican_2016,
+                lassss$fifty_fifty)
+```
+
+```{r}
+confusionMatrix(lassss$i_republican_2016,
+                lassss$bg_conf)
+```
 
 **11\.** How does the performance of this logistic Lasso compare to the logistic regression in Part 2?
 
+While there are slight differences in some of the metrics by one to several percentage points, such as with accuracy, the 95% confidence interval, the kappa value, etc, there was a considering amount of variation in the P-value depending on the slight variations made to the model. This number can provide significant depending on the selected significance threshold. If the p-value is below that level (often 0.05), then we reject the null hypothesis of the test that the two models are equal.
+
+Looking at the results above, we can support the idea of having a cutoff value higher or lower than .5 will improve the performance of our model. 
+
 **12\.** Do you think moving to a logistic elasticnet would improve anything? Explain.
+
+I don't think that it would change anything. We saw earlier in the assignment that, at least in the context of this analysis, the pure LASSO regression had slightly stronger (if not, then no statistically significant difference) compared to the elasticnet. Therefore we would not be gaining any performance with such modeling.
 
 ## Part 4: Reflection
 

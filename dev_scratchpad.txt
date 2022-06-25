@@ -1,0 +1,85 @@
+```{r eval=FALSE, echo=FALSE}
+election2 <- election %>% select(-c("county")) %>%
+   mutate(state = as.factor(state),
+          i_republican_2012 = as.factor(i_republican_2012),
+          i_republican_2016 = as.factor(i_republican_2016))
+
+# Processing recipe
+elect_recipe = election2 %>%
+   recipe(i_republican_2016 ~ .) %>% 
+  update_role(fips, new_role = "id variable") %>% 
+  step_normalize(all_predictors() & all_numeric()) %>% 
+  step_dummy(all_predictors() & all_nominal()) %>% 
+  step_rename_at(everything(), fn = stringr::str_to_lower)
+elect_clean = elect_recipe %>% prep() %>% juice()
+elect_cv = elect_clean %>% vfold_cv(v =5)
+
+# Defining model
+mod_lass = logistic_reg(penalty = tune(),
+                        mixture = 1) %>% 
+   set_engine("glmnet") %>%
+   set_mode("classification")
+
+# Fitting
+lass_form_fit <- mod_lass %>%
+   fit_xy(elect_cv,
+      x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
+      y = elect_clean$i_republican_2016,
+      control = control_parsnip())
+
+# Making predictions
+preds = predict(lass_form_fit, elect_clean)
+
+temp = as.data.frame(preds$.pred_class) %>% rename(vec = 1)
+temp1 = temp %>% mutate(new_c = elect_clean$i_republican_2016)
+
+# Confusion matrix and other metrics
+confusionMatrix(temp1$vec,temp1$new_c)
+```
+
+
+```{r error=TRUE}
+lambdas =10^seq(from =5, to = -2, length =1e2)
+alphas = seq(from =0, to =1, by =0.1)
+
+control <- control_resamples(save_pred = TRUE)
+
+# Define the elasticnet model
+model_net = linear_reg(penalty = tune(),
+                       mixture = tune()) %>%
+   set_engine("glmnet") 
+
+# Define workflow
+workflow_net = workflow() %>%
+   add_model(model_net) %>%
+   add_recipe(elect_recipe)
+
+temp = fit_resamples(model_net,elect_recipe,elect_cv,control = control)
+
+# CV elasticnet in range of lambdas
+cv_net = workflow_net %>%
+   tune_grid(elect_cv,
+             grid = data.frame(penalty=lambdas,mixture=.5),
+             metrics = metric_set(rmse))
+```
+
+
+               Accuracy : 0.9798          
+                 95% CI : (0.9742, 0.9844)
+    No Information Rate : 0.8421          
+    P-Value [Acc > NIR] : <2e-16          
+                                          
+                  Kappa : 0.9243          
+                                          
+ Mcnemar's Test P-Value : 0.6143          
+                                          
+            Sensitivity : 0.9411          
+            Specificity : 0.9870          
+         Pos Pred Value : 0.9316          
+         Neg Pred Value : 0.9889          
+             Prevalence : 0.1579          
+         Detection Rate : 0.1486          
+   Detection Prevalence : 0.1595          
+      Balanced Accuracy : 0.9640   
+
+While there are slight differences in some of the metrics, such as accurcacy, the 95% confidence intervatl
