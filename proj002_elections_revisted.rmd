@@ -15,7 +15,7 @@ knitr::opts_chunk$set(echo = TRUE)
 pacman::p_load(dplyr, magrittr,
                glmnet, tidymodels,
                dvmisc, parsnip, tidyverse, tidyr,tune,
-               workflows, recipes)
+               workflows, recipes, yardstick, caret, rsample)
 election = read.csv("election-2016.csv")
 
 # Setting seed
@@ -186,15 +186,60 @@ Since we can see that the RMSE for the elasticnet models is better (lower) when 
 
 *Hint:* You can tell `tune_grid()` or `fit_resamples()` which metrics to collect via the `metrics` argument. You'll want to give the argument a [`metric_set()`](https://yardstick.tidymodels.org/reference/metric_set.html).
 
+```{r}
+election2 <- election %>% select(-c("county")) %>%
+   mutate(state = as.factor(state),
+          i_republican_2012 = as.factor(i_republican_2012),
+          i_republican_2016 = as.factor(i_republican_2016))
+
+# Processing recipe
+elect_recipe = election2 %>%
+   recipe(i_republican_2016 ~ .) %>% 
+  update_role(fips, new_role = "id variable") %>% 
+  step_normalize(all_predictors() & all_numeric()) %>% 
+  step_dummy(all_predictors() & all_nominal()) %>% 
+  step_rename_at(everything(), fn = stringr::str_to_lower)
+elect_clean = elect_recipe %>% prep() %>% juice()
+elect_cv = elect_clean %>% vfold_cv(v =5)
+
+# Defining model
+mod_logi = logistic_reg(mode = "classification") %>% 
+   et_engine("glm")
+
+# Fitting
+lm_form_fit <- mod_logi %>%
+   fit_xy(elect_cv,
+      x = elect_clean %>% select(-i_republican_2016, -fips) %>% as.matrix(),
+      y = elect_clean$i_republican_2016,
+      control = control_parsnip())  
+
+# Making predictions
+elect_clean$preds = predict(lm_form_fit, elect_clean)
+
+temp = as.data.frame(preds$.pred_class) %>% rename(vec = 1)
+temp1 = temp %>% mutate(new_c = elect_clean$i_republican_2016)
+
+# Confusion matrix and other metrics
+confusionMatrix(temp1$vec,temp1$new_c)
+```
+
+
 **07\.** What is the cross-validated accuracy of this logistic model? 
+
+The accuracy is 97.98 percent. 
 
 **08\.** Is your accuracy "good"? Explain your answer—including a comparison to the null classifier.
 
-**09\.** What do the other metrics tell you about your model? Is it "good"? Are you consistently missing one class of outcomes? Explain.
+I would say that this is a fairly good model. Several of the metrics are in the ninetieth percentile and the confidence interval is also higher and narrow. 
 
 ## Part 3: Logistic Lasso
 
 **10\.** Now fit a logistic Lasso regression (`logistic_reg()` in `tidymodels`, but now tuning the penalty) model—using 5-fold cross validation. Again: record the following metrics: accuracy, precision, specificity, sensitivity, ROC AUC.
+
+```{r}
+
+```
+
 
 **11\.** How does the performance of this logistic Lasso compare to the logistic regression in Part 2?
 
